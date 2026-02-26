@@ -103,6 +103,8 @@ const PRICING: Record<string, { input: number; output: number }> = {
   'claude-opus-4-6':   { input: 15.00 / 1e6, output: 75.00 / 1e6 },
   'claude-haiku-4-5':  { input: 0.80 / 1e6, output:  4.00 / 1e6 },
   'typhoon-ocr':       { input: 0,           output: 0            },
+  'gemini-3-flash-preview': { input: 0.15 / 1e6, output: 0.60 / 1e6 },
+  'gemini-3-pro-preview':   { input: 1.25 / 1e6, output: 10.00 / 1e6 },
 };
 
 // ── Data Loading ───────────────────────────────────────────────────
@@ -856,6 +858,7 @@ async function main() {
   // Initialize API clients
   const isTyphoon = model.startsWith('typhoon');
   const isClaude = model.startsWith('claude');
+  const isGemini = model.startsWith('gemini');
   let openaiClient: OpenAI | null = null;
   let anthropicClient: Anthropic | null = null;
   let typhoonKeys: string[] = [];
@@ -871,6 +874,16 @@ async function main() {
     console.log(`Using ${typhoonKeys.length} Typhoon API keys\n`);
   } else if (isClaude) {
     anthropicClient = new Anthropic();
+  } else if (isGemini) {
+    const geminiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY;
+    if (!geminiKey) {
+      console.error('Set GOOGLE_GENERATIVE_AI_API_KEY in .env');
+      process.exit(1);
+    }
+    openaiClient = new OpenAI({
+      apiKey: geminiKey,
+      baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai/',
+    });
   } else {
     openaiClient = new OpenAI();
   }
@@ -893,6 +906,10 @@ async function main() {
       } else if (isClaude) {
         const prompt = wrapPrompt(sample.question);
         apiResult = await callAnthropic(anthropicClient!, model, sample.imageBytes, prompt);
+      } else if (isGemini) {
+        const prompt = wrapPrompt(sample.question);
+        const dataUrl = imageToDataUrl(sample.imageBytes);
+        apiResult = await callVLM(openaiClient!, model, dataUrl, prompt);
       } else {
         const prompt = wrapPrompt(sample.question);
         const dataUrl = imageToDataUrl(sample.imageBytes);
