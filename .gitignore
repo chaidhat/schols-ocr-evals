@@ -140,3 +140,6 @@ vite.config.ts.timestamp-*
 
 # Dataset files
 data/
+
+# Evaluation results
+results/
