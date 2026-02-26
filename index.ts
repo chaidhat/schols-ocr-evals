@@ -105,6 +105,7 @@ const PRICING: Record<string, { input: number; output: number }> = {
   'typhoon-ocr':       { input: 0,           output: 0            },
   'gemini-3-flash-preview': { input: 0.15 / 1e6, output: 0.60 / 1e6 },
   'gemini-3-pro-preview':   { input: 1.25 / 1e6, output: 10.00 / 1e6 },
+  'iapp-ocr':            { input: 0,           output: 0            },
 };
 
 // ── Data Loading ───────────────────────────────────────────────────
@@ -750,6 +751,60 @@ async function callTyphoonOCR(
   return { content: '', inputTokens: 0, outputTokens: 0 };
 }
 
+// ── iApp OCR API ────────────────────────────────────────────────────
+
+async function callIappOCR(
+  apiKey: string,
+  imageBytes: Uint8Array,
+  maxRetries = 5,
+): Promise<ApiResult> {
+  const mime = detectMimeType(imageBytes);
+  const ext = mimeExtension(mime);
+
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      const blob = new Blob([imageBytes], { type: mime });
+      const formData = new FormData();
+      formData.append('file', blob, `image.${ext}`);
+
+      const response = await fetch('https://api.iapp.co.th/v3/store/ocr/document/ocr', {
+        method: 'POST',
+        headers: { apikey: apiKey },
+        body: formData,
+      });
+
+      if (response.ok) {
+        const result: any = await response.json();
+        const texts: string[] = result.text || [];
+        return { content: texts.join('\n'), inputTokens: 0, outputTokens: 0 };
+      }
+
+      if (response.status === 429 || response.status >= 500) {
+        const baseDelay = response.status === 429 ? 5000 : 1000;
+        const delay = baseDelay * Math.pow(2, attempt) + Math.random() * 1000;
+        console.warn(
+          `  ${response.status === 429 ? 'Rate limited' : 'Server error'} (${response.status}), retry in ${(delay / 1000).toFixed(1)}s...`,
+        );
+        await sleep(delay);
+        continue;
+      }
+
+      console.error(`  API error: ${response.status} ${await response.text()}`);
+      return { content: '', inputTokens: 0, outputTokens: 0 };
+    } catch (err: any) {
+      if (attempt < maxRetries - 1) {
+        const delay = 1000 * Math.pow(2, attempt) + Math.random() * 1000;
+        console.warn(`  Network error, retry in ${(delay / 1000).toFixed(1)}s...`);
+        await sleep(delay);
+        continue;
+      }
+      console.error(`  Error: ${err.message}`);
+      return { content: '', inputTokens: 0, outputTokens: 0 };
+    }
+  }
+  return { content: '', inputTokens: 0, outputTokens: 0 };
+}
+
 // ── Results Management ─────────────────────────────────────────────
 
 function getResultsPath(model: string): string {
@@ -859,9 +914,11 @@ async function main() {
   const isTyphoon = model.startsWith('typhoon');
   const isClaude = model.startsWith('claude');
   const isGemini = model.startsWith('gemini');
+  const isIapp = model === 'iapp-ocr';
   let openaiClient: OpenAI | null = null;
   let anthropicClient: Anthropic | null = null;
   let typhoonKeys: string[] = [];
+  let iappKey = '';
 
   if (isTyphoon) {
     typhoonKeys = [1, 2, 3, 4]
@@ -872,6 +929,12 @@ async function main() {
       process.exit(1);
     }
     console.log(`Using ${typhoonKeys.length} Typhoon API keys\n`);
+  } else if (isIapp) {
+    iappKey = process.env.IAPP_API_KEY || '';
+    if (!iappKey) {
+      console.error('Set IAPP_API_KEY in .env');
+      process.exit(1);
+    }
   } else if (isClaude) {
     anthropicClient = new Anthropic();
   } else if (isGemini) {
@@ -903,6 +966,8 @@ async function main() {
       if (isTyphoon) {
         const key = typhoonKeys[typhoonKeyIdx++ % typhoonKeys.length];
         apiResult = await callTyphoonOCR(key, sample.imageBytes);
+      } else if (isIapp) {
+        apiResult = await callIappOCR(iappKey, sample.imageBytes);
       } else if (isClaude) {
         const prompt = wrapPrompt(sample.question);
         apiResult = await callAnthropic(anthropicClient!, model, sample.imageBytes, prompt);
